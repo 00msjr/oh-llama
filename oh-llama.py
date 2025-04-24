@@ -16,41 +16,43 @@ import signal
 import shutil
 
 try:
+    import colorama
+    from colorama import Fore, Back, Style
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.styles import Style as PromptStyle
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.prompt import Prompt
-    from rich.live import Live
-    from rich.layout import Layout
-    from rich.text import Text
-    from rich.box import Box, ROUNDED
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 except ImportError:
     print("Installing required packages...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", 
-                          "rich", "prompt_toolkit", "requests"])
+                          "colorama", "prompt_toolkit", "rich", "requests"])
+    import colorama
+    from colorama import Fore, Back, Style
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.styles import Style as PromptStyle
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.prompt import Prompt
-    from rich.live import Live
-    from rich.layout import Layout
-    from rich.text import Text
-    from rich.box import Box, ROUNDED
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 
-# Constants
-OLLAMA_API_BASE = "http://localhost:11434/api"
-HISTORY_FILE = os.path.expanduser("~/.oh_llama_history")
+# Initialize colorama
+colorama.init(autoreset=True)
 
 # Initialize Rich console
 console = Console()
+
+# Constants
+OLLAMA_API_BASE = "http://localhost:11434/api"
+OLLAMA_MODELS_URL = "https://ollama.com/library"
+HISTORY_FILE = os.path.expanduser("~/.oh_llama_history")
 
 class OllamaService:
     """Service to interact with Ollama"""
@@ -109,7 +111,12 @@ class OllamaService:
     def get_available_models() -> List[Dict[str, Any]]:
         """Get list of models available from Ollama library"""
         try:
-            # Fallback to hardcoded popular models
+            # This is a simplified approach - the actual Ollama library API might be different
+            response = requests.get("https://ollama.ai/api/models")
+            if response.status_code == 200:
+                return response.json()
+            
+            # Fallback to hardcoded popular models if API fails
             return [
                 {"name": "llama3", "description": "Meta's Llama 3 model"},
                 {"name": "llama3:8b", "description": "Meta's Llama 3 8B parameters model"},
@@ -122,7 +129,7 @@ class OllamaService:
                 {"name": "llava", "description": "Multimodal model with vision capabilities"},
                 {"name": "orca-mini", "description": "Lightweight model for resource-constrained environments"}
             ]
-        except Exception:
+        except requests.RequestException:
             console.print("[red]Error fetching available models[/]")
             return []
     
@@ -164,45 +171,29 @@ class OllamaService:
             return False
     
     @staticmethod
-    def generate_response(model: str, prompt: str, stream_callback=None) -> str:
-        """Generate a response from the model"""
+    def generate_response(model: str, prompt: str) -> str:
+        """Generate a response from the model without streaming"""
         headers = {"Content-Type": "application/json"}
         data = {
             "model": model,
             "prompt": prompt,
-            "stream": True
+            "stream": False  # Don't stream, get complete response
         }
         
-        full_response = ""
-        
         try:
-            with requests.post(
+            response = requests.post(
                 f"{OLLAMA_API_BASE}/generate", 
                 headers=headers,
-                json=data,
-                stream=True
-            ) as response:
-                if response.status_code != 200:
-                    return f"Error: Received status code {response.status_code}"
-                
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            line_data = json.loads(line.decode('utf-8'))
-                            response_part = line_data.get("response", "")
-                            full_response += response_part
-                            
-                            if stream_callback and response_part:
-                                stream_callback(response_part)
-                                
-                            if line_data.get("done", False):
-                                break
-                        except json.JSONDecodeError:
-                            pass
-                
-                return full_response
+                json=data
+            )
+            
+            if response.status_code != 200:
+                return f"Error: Received status code {response.status_code}"
+            
+            response_data = response.json()
+            return response_data.get("response", "")
+            
         except requests.RequestException as e:
-            console.print(f"[red]Error: {str(e)}[/]")
             return f"Error: {str(e)}"
 
 
@@ -211,10 +202,18 @@ class OhLlamaCLI:
     
     def __init__(self):
         self.ollama_service = OllamaService()
+        self.selected_model = None
         self.console = Console()
+        self.prompt_style = PromptStyle.from_dict({
+            'prompt': '#00aa00 bold',
+            'continuation': 'gray'
+        })
+        
+        # Create prompt session with history
         self.session = PromptSession(
             history=FileHistory(HISTORY_FILE),
-            auto_suggest=AutoSuggestFromHistory()
+            auto_suggest=AutoSuggestFromHistory(),
+            style=self.prompt_style
         )
     
     def print_header(self):
@@ -236,8 +235,7 @@ class OhLlamaCLI:
             subtitle="[bold green]Interact with Ollama models[/]",
             width=min(80, terminal_width),
             style="cyan",
-            border_style="cyan",
-            box=ROUNDED
+            border_style="cyan"
         ))
     
     def get_key(self):
@@ -280,7 +278,7 @@ class OhLlamaCLI:
             return self.pull_new_model()
         
         # Display local models
-        table = Table(title="[bold]Local Models[/]", show_header=True, header_style="bold magenta", box=ROUNDED)
+        table = Table(title="[bold]Local Models[/]", show_header=True, header_style="bold magenta")
         table.add_column("#", style="dim")
         table.add_column("Model", style="cyan")
         table.add_column("Size", style="green")
@@ -326,12 +324,9 @@ class OhLlamaCLI:
                     self.console.print(f"  {option}")
             
             # Command legend
-            self.console.print(Panel(
-                "↑/↓: Navigate   Enter: Select   Ctrl+D: Exit",
-                title="[bold]Commands[/]",
-                border_style="dim",
-                box=ROUNDED
-            ))
+            self.console.print("\n[dim]╭─ Commands ───────────────────────────────────────────╮[/]")
+            self.console.print("[dim]│ ↑/↓: Navigate   Enter: Select   Ctrl+D: Exit        │[/]")
+            self.console.print("[dim]╰────────────────────────────────────────────────────╯[/]")
         
         print_menu()
         
@@ -376,7 +371,7 @@ class OhLlamaCLI:
             return None
         
         # Display available models
-        table = Table(title="[bold]Available Models[/]", show_header=True, header_style="bold magenta", box=ROUNDED)
+        table = Table(title="[bold]Available Models[/]", show_header=True, header_style="bold magenta")
         table.add_column("#", style="dim")
         table.add_column("Model", style="cyan")
         table.add_column("Description", style="green")
@@ -405,12 +400,9 @@ class OhLlamaCLI:
                     self.console.print(f"  {option}")
             
             # Command legend
-            self.console.print(Panel(
-                "↑/↓: Navigate   Enter: Select   Ctrl+D: Cancel",
-                title="[bold]Commands[/]",
-                border_style="dim",
-                box=ROUNDED
-            ))
+            self.console.print("\n[dim]╭─ Commands ───────────────────────────────────────────╮[/]")
+            self.console.print("[dim]│ ↑/↓: Navigate   Enter: Select   Ctrl+D: Cancel      │[/]")
+            self.console.print("[dim]╰────────────────────────────────────────────────────╯[/]")
         
         print_menu()
         
@@ -445,7 +437,7 @@ class OhLlamaCLI:
         self.print_header()
         
         # Create a table of models to delete
-        table = Table(title="[bold red]Delete Model[/]", show_header=True, header_style="bold red", box=ROUNDED)
+        table = Table(title="[bold red]Delete Model[/]", show_header=True, header_style="bold red")
         table.add_column("#", style="dim")
         table.add_column("Model", style="cyan")
         table.add_column("Size", style="green")
@@ -461,12 +453,9 @@ class OhLlamaCLI:
         self.console.print("\n[bold yellow]Select a model to delete or press Ctrl+D to cancel[/]")
         
         # Command legend
-        self.console.print(Panel(
-            "Enter number to select   Ctrl+D: Cancel",
-            title="[bold]Commands[/]",
-            border_style="dim",
-            box=ROUNDED
-        ))
+        self.console.print("\n[dim]╭─ Commands ───────────────────────────────────────────╮[/]")
+        self.console.print("[dim]│ Enter number to select   Ctrl+D: Cancel             │[/]")
+        self.console.print("[dim]╰────────────────────────────────────────────────────╯[/]")
         
         try:
             choice = Prompt.ask(
@@ -508,28 +497,17 @@ class OhLlamaCLI:
         """Main chat loop with the selected model"""
         self.console.clear()
         self.print_header()
-        
-        # Create a chat panel
-        chat_panel = Panel(
-            f"Chatting with [cyan]{model}[/]",
-            title="[bold green]Chat Session[/]",
-            subtitle="Type 'exit' or 'quit' to end",
-            box=ROUNDED,
-            border_style="green"
-        )
-        self.console.print(chat_panel)
+        self.console.print(f"\n[bold green]Chatting with model:[/] [cyan]{model}[/]")
         
         # Command legend
-        self.console.print(Panel(
-            "exit/quit: Exit chat   Ctrl+C: Cancel input   Ctrl+D: Exit chat",
-            title="[bold]Commands[/]",
-            border_style="dim",
-            box=ROUNDED
-        ))
+        self.console.print("\n[dim]╭─ Commands ───────────────────────────────────────────╮[/]")
+        self.console.print("[dim]│ exit/quit: Exit chat   Ctrl+C: Cancel input          │[/]")
+        self.console.print("[dim]│ Ctrl+D: Exit chat                                    │[/]")
+        self.console.print("[dim]╰────────────────────────────────────────────────────╯[/]")
         
         while True:
             try:
-                user_input = self.session.prompt("\n[bold green]You:[/] ")
+                user_input = self.session.prompt(f"\n{Fore.GREEN}You: {Style.RESET_ALL}")
                 
                 if user_input.lower() in ["exit", "quit"]:
                     break
@@ -537,35 +515,17 @@ class OhLlamaCLI:
                 if not user_input.strip():
                     continue
                 
-                # Display user message in a panel
-                self.console.print(Panel(
-                    user_input,
-                    title="[bold green]You[/]",
-                    border_style="green",
-                    box=ROUNDED
-                ))
+                print(f"\n{Fore.CYAN}{model}: {Style.RESET_ALL}", end="", flush=True)
                 
-                # Collect the response
-                response_text = ""
+                # Get the response and print it character by character
+                response = self.ollama_service.generate_response(model, user_input)
                 
-                def collect_char(char):
-                    nonlocal response_text
-                    response_text += char
+                # Print character by character
+                for char in response:
+                    print(char, end="", flush=True)
+                    time.sleep(0.001)  # Small delay for visual effect
                 
-                # Show a "thinking" indicator
-                with self.console.status(f"[bold cyan]{model} is thinking...[/]"):
-                    self.ollama_service.generate_response(model, user_input, collect_char)
-                
-                # Display the full response in a panel
-                if response_text:
-                    self.console.print(Panel(
-                        response_text,
-                        title=f"[bold cyan]{model}[/]",
-                        border_style="cyan",
-                        box=ROUNDED
-                    ))
-                else:
-                    self.console.print(f"[bold red]Error: No response from {model}[/]")
+                print()  # Add a newline after the response
                 
             except KeyboardInterrupt:
                 continue
