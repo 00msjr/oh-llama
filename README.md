@@ -1,4 +1,4 @@
-![oh-llama](./oh-llama-logo.png)
+<img src="./oh-llama-logo.png" alt="oh-llama-logo" width="250" height="250">
 
 # Oh-Llama
 

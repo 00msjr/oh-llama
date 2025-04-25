@@ -11,8 +11,8 @@ import sys
 import time
 import requests
 from typing import List, Dict, Any, Optional
-import threading
-import signal
+#import threading
+#import signal
 import shutil
 
 try:
@@ -112,7 +112,7 @@ class OllamaService:
         """Get list of models available from Ollama library"""
         try:
             # This is a simplified approach - the actual Ollama library API might be different
-            response = requests.get("https://ollama.ai/api/models")
+            response = requests.get("https://ollama.ai/models")
             if response.status_code == 200:
                 return response.json()
             
